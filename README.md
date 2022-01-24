@@ -324,6 +324,24 @@ my_stream = db.child("posts").stream(stream_handler, stream_id="new_posts")
 my_stream.close()
 ```
 
+#### Local cache
+
+For an easier-to-user interface, you can watch data with the ```watch()``` method.
+
+```python
+def new_post_handler(key, value):
+    print(key) # -K7yGTTEp7O549EzTYtI
+    print(value) # {'title': 'Pyrebase', "body": "etc..."}
+
+my_watcher = db.child("posts").watch(childAddedHandler=new_post_handler)
+```
+
+#### close the watcher
+
+```python
+my_watcher.close()
+```
+
 ### Complex Queries
 
 Queries can be built by chaining multiple query parameters together.
