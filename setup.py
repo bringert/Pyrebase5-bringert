@@ -1,11 +1,11 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='Pyrebase4',
-    version='4.5.0',
-    url='https://github.com/nhorvath/Pyrebase4',
-    description='A simple python wrapper for the Firebase API with current deps',
-    author='nhorvath',
+    name='Pyrebase5-bringert',
+    version='5.0.0',
+    url='https://github.com/bringert/Pyrebase5-bringert',
+    description='A simple python wrapper for the Firebase API with current deps and support for both service account and user authentication',
+    author='bringert',
     license='MIT',
     classifiers=[
         'Development Status :: 3 - Alpha',
