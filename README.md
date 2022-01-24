@@ -65,10 +65,6 @@ Check out the documentation for each service for further details.
 
 ## Authentication
 
-The ```sign_in_with_email_and_password()``` method will return user data including a token you can use to adhere to security rules.
-
-Each of the following methods accepts a user token: ```get()```, ```push()```, ```set()```, ```update()```, ```remove()``` and ```stream()```.
-
 ```python
 # Get a reference to the auth service
 auth = firebase.auth()
@@ -79,32 +75,25 @@ user = auth.sign_in_with_email_and_password(email, password)
 # Log the user in anonymously
 user = auth.sign_in_anonymous()
 
-# Get a reference to the database service
-db = firebase.database()
+# Get a valid idToken, first refreshing it if it has expired
+auth.get_valid_id_token()
+
+# Get a reference to the database service, which is accessed using the
+# currently logged in user
+db = firebase.database(user_auth=auth)
 
 # data to save
 data = {
     "name": "Mortimer 'Morty' Smith"
 }
 
-# Pass the user's idToken to the push method
-results = db.child("users").push(data, user['idToken'])
+results = db.child("users").push(data)
 ```
 
-### Token expiry
-
-A user's idToken expires after 1 hour, so be sure to use the user's refreshToken to avoid stale tokens.
-```
-user = auth.sign_in_with_email_and_password(email, password)
-# before the 1 hour expiry:
-user = auth.refresh(user['refreshToken'])
-# now we have a fresh token
-user['idToken']
-```
 
 ### Custom tokens
 
-You can also create users using [custom tokens](https://firebase.google.com/docs/auth/server/create-custom-tokens), for example:
+You can also sign in users using [custom tokens](https://firebase.google.com/docs/auth/server/create-custom-tokens), for example:
 ```
 token = auth.create_custom_token("your_custom_id")
 ```
