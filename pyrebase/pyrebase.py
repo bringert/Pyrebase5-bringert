@@ -12,6 +12,7 @@ from random import randrange
 import time
 from collections import OrderedDict
 from .pyre_sseclient import SSEClient
+from .local_cache import LocalCache
 import threading
 import socket
 from oauth2client.service_account import ServiceAccountCredentials
@@ -371,6 +372,12 @@ class Database:
 
     def stream(self, stream_handler, stream_id=None, is_async=True):
         return Stream(self.build_request_url_builder(), stream_handler, self.build_headers, stream_id, is_async)
+
+    def watch(self, is_async=True, valueEventHandler=None,
+                childAddedHandler=None, childRemovedHandler=None,
+                childChangedHandler=None):
+        return LocalCache(self, valueEventHandler, childAddedHandler,
+                childRemovedHandler, childChangedHandler)
 
     def generate_key(self):
         push_chars = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz'
