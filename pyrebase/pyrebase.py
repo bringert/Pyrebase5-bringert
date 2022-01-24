@@ -62,18 +62,18 @@ class Firebase:
     def auth(self):
         return Auth(self.api_key, self.requests, self.credentials)
 
-    def database(self):
-        return Database(self.credentials, self.api_key, self.database_url, self.requests)
+    def database(self, user_auth=None):
+        return Database(self.credentials, self.api_key, self.database_url, self.requests, user_auth=user_auth)
 
     def storage(self):
         return Storage(self.credentials, self.storage_bucket, self.requests)
-
 
 class Auth:
     """ Authentication Service """
     def __init__(self, api_key, requests, credentials):
         self.api_key = api_key
         self.current_user = None
+        self.id_token_expiry_time = 0
         self.requests = requests
         self.credentials = credentials
 
@@ -83,7 +83,7 @@ class Auth:
         data = json.dumps({"email": email, "password": password, "returnSecureToken": True})
         request_object = requests.post(request_ref, headers=headers, data=data)
         raise_detailed_error(request_object)
-        self.current_user = request_object.json()
+        self.set_current_user(request_object.json())
         return request_object.json()
 
     def sign_in_anonymous(self):
@@ -92,7 +92,7 @@ class Auth:
         data = json.dumps({"returnSecureToken": True})
         request_object = requests.post(request_ref, headers=headers, data=data)
         raise_detailed_error(request_object)
-        self.current_user = request_object.json()
+        self.set_current_user(request_object.json())
         return request_object.json()
 
     def create_custom_token(self, uid, additional_claims=None, expiry_minutes=60):
@@ -115,6 +115,7 @@ class Auth:
         data = json.dumps({"returnSecureToken": True, "token": token})
         request_object = requests.post(request_ref, headers=headers, data=data)
         raise_detailed_error(request_object)
+        self.set_current_user(request_object.json())
         return request_object.json()
 
     def refresh(self, refresh_token):
@@ -128,9 +129,32 @@ class Auth:
         user = {
             "userId": request_object_json["user_id"],
             "idToken": request_object_json["id_token"],
+            "expiresIn": request_object_json["expires_in"],
             "refreshToken": request_object_json["refresh_token"]
         }
+        self.set_current_user(user.copy())
         return user
+
+    def set_current_user(self, user):
+        self.current_user = user
+        if 'expiresIn' in user:
+            self.id_token_expiry_time = int(time.time()) + int(user['expiresIn'])
+        else:
+            self.id_token_expiry_time = 0
+
+    def is_id_token_expired(self):
+        slop = 10
+        return time.time() >= self.id_token_expiry_time - slop
+
+    def get_valid_id_token(self):
+        if self.current_user:
+            if 'idToken' in self.current_user and not self.is_id_token_expired():
+                return self.current_user['idToken']
+            elif 'refreshToken' in self.current_user:
+                user = self.refresh(self.current_user['refreshToken'])
+                if 'idToken' in user:
+                    return user['idToken']
+        return None
 
     def get_account_info(self, id_token):
         request_ref = "https://www.googleapis.com/identitytoolkit/v3/relyingparty/getAccountInfo?key={0}".format(self.api_key)
@@ -183,17 +207,18 @@ class Auth:
 
 class Database:
     """ Database Service """
-    def __init__(self, credentials, api_key, database_url, requests):
+    def __init__(self, credentials, api_key, database_url, requests, user_auth=None):
 
         if not database_url.endswith('/'):
             url = ''.join([database_url, '/'])
         else:
             url = database_url
 
-        self.credentials = credentials
+        self.credentials = credentials if user_auth is None else None
         self.api_key = api_key
         self.database_url = url
         self.requests = requests
+        self.user_auth = user_auth
 
         self.path = ""
         self.build_query = {}
@@ -246,36 +271,50 @@ class Database:
             self.path = new_path
         return self
 
-    def build_request_url(self, token):
-        parameters = {}
-        if token:
-            parameters['auth'] = token
-        for param in list(self.build_query):
-            if type(self.build_query[param]) is str:
-                parameters[param] = '"' + self.build_query[param] + '"'
-            elif type(self.build_query[param]) is bool:
-                parameters[param] = "true" if self.build_query[param] else "false"
-            else:
-                parameters[param] = self.build_query[param]
+    def get_token(self):
+        if self.user_auth:
+            return self.user_auth.get_valid_id_token()
+        return None
+
+    def build_request_url(self):
+        return self.build_request_url_builder()()
+
+    def build_request_url_builder(self):
+        """ Returns a function that builds a URL for the current request """
+        path = self.path
+        query = self.build_query
         # reset path and build_query for next query
-        request_ref = '{0}{1}.json?{2}'.format(self.database_url, self.path, urlencode(parameters))
         self.path = ""
         self.build_query = {}
-        return request_ref
+        return lambda: self.request_url_builder(path, query)
 
-    def build_headers(self, token=None):
+    def request_url_builder(self, path, query):
+        parameters = {}
+        token = self.get_token()
+        if token:
+            parameters['auth'] = token
+        for param, value in query.items():
+            if type(value) is str:
+                parameters[param] = '"' + value + '"'
+            elif type(value) is bool:
+                parameters[param] = "true" if value else "false"
+            else:
+                parameters[param] = value
+        return '{0}{1}.json?{2}'.format(self.database_url, path, urlencode(parameters))
+
+    def build_headers(self):
         headers = {"content-type": "application/json; charset=UTF-8"}
-        if not token and self.credentials:
+        if self.credentials:
             access_token = self.credentials.get_access_token().access_token
             headers['Authorization'] = 'Bearer ' + access_token
         return headers
 
-    def get(self, token=None, json_kwargs={}):
+    def get(self, json_kwargs={}):
         build_query = self.build_query
         query_key = self.path.split("/")[-1]
-        request_ref = self.build_request_url(token)
+        request_ref = self.build_request_url()
         # headers
-        headers = self.build_headers(token)
+        headers = self.build_headers()
         # do request
         request_object = self.requests.get(request_ref, headers=headers)
         raise_detailed_error(request_object)
@@ -302,47 +341,36 @@ class Database:
                 sorted_response = sorted(request_dict.items(), key=lambda item: (build_query["orderBy"] in item[1], item[1].get(build_query["orderBy"], "")))
         return PyreResponse(convert_to_pyre(sorted_response), query_key)
 
-    def push(self, data, token=None, json_kwargs={}):
-        request_ref = self.check_token(self.database_url, self.path, token)
-        self.path = ""
-        headers = self.build_headers(token)
+    def push(self, data, json_kwargs={}):
+        request_ref = self.build_request_url()
+        headers = self.build_headers()
         request_object = self.requests.post(request_ref, headers=headers, data=json.dumps(data, **json_kwargs).encode("utf-8"))
         raise_detailed_error(request_object)
         return request_object.json()
 
-    def set(self, data, token=None, json_kwargs={}):
-        request_ref = self.check_token(self.database_url, self.path, token)
-        self.path = ""
-        headers = self.build_headers(token)
+    def set(self, data, json_kwargs={}):
+        request_ref = self.build_request_url()
+        headers = self.build_headers()
         request_object = self.requests.put(request_ref, headers=headers, data=json.dumps(data, **json_kwargs).encode("utf-8"))
         raise_detailed_error(request_object)
         return request_object.json()
 
-    def update(self, data, token=None, json_kwargs={}):
-        request_ref = self.check_token(self.database_url, self.path, token)
-        self.path = ""
-        headers = self.build_headers(token)
+    def update(self, data, json_kwargs={}):
+        request_ref = self.build_request_url()
+        headers = self.build_headers()
         request_object = self.requests.patch(request_ref, headers=headers, data=json.dumps(data, **json_kwargs).encode("utf-8"))
         raise_detailed_error(request_object)
         return request_object.json()
 
-    def remove(self, token=None):
-        request_ref = self.check_token(self.database_url, self.path, token)
-        self.path = ""
-        headers = self.build_headers(token)
+    def remove(self):
+        request_ref = self.build_request_url()
+        headers = self.build_headers()
         request_object = self.requests.delete(request_ref, headers=headers)
         raise_detailed_error(request_object)
         return request_object.json()
 
-    def stream(self, stream_handler, token=None, stream_id=None, is_async=True):
-        request_ref = self.build_request_url(token)
-        return Stream(request_ref, stream_handler, self.build_headers, stream_id, is_async)
-
-    def check_token(self, database_url, path, token):
-        if token:
-            return '{0}{1}.json?auth={2}'.format(database_url, path, token)
-        else:
-            return '{0}{1}.json'.format(database_url, path)
+    def stream(self, stream_handler, stream_id=None, is_async=True):
+        return Stream(self.build_request_url_builder(), stream_handler, self.build_headers, stream_id, is_async)
 
     def generate_key(self):
         push_chars = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz'
@@ -375,19 +403,18 @@ class Database:
         data = sorted(dict(new_list).items(), key=lambda item: item[1][by_key], reverse=reverse)
         return PyreResponse(convert_to_pyre(data), origin.key())
 
-    def get_etag(self, token=None, json_kwargs={}):
-         request_ref = self.build_request_url(token)
-         headers = self.build_headers(token)
+    def get_etag(self, json_kwargs={}):
+         request_ref = self.build_request_url()
+         headers = self.build_headers()
          # extra header to get ETag
          headers['X-Firebase-ETag'] = 'true'
          request_object = self.requests.get(request_ref, headers=headers)
          raise_detailed_error(request_object)
          return request_object.headers['ETag']
 
-    def conditional_set(self, data, etag, token=None, json_kwargs={}):
-         request_ref = self.check_token(self.database_url, self.path, token)
-         self.path = ""
-         headers = self.build_headers(token)
+    def conditional_set(self, data, etag, json_kwargs={}):
+         request_ref = self.build_request_url()
+         headers = self.build_headers()
          headers['if-match'] = etag
          request_object = self.requests.put(request_ref, headers=headers, data=json.dumps(data, **json_kwargs).encode("utf-8"))
 
@@ -398,10 +425,9 @@ class Database:
          raise_detailed_error(request_object)
          return request_object.json()
 
-    def conditional_remove(self, etag, token=None):
-         request_ref = self.check_token(self.database_url, self.path, token)
-         self.path = ""
-         headers = self.build_headers(token)
+    def conditional_remove(self, etag):
+         request_ref = self.build_request_url()
+         headers = self.build_headers()
          headers['if-match'] = etag
          request_object = self.requests.delete(request_ref, headers=headers)
 
@@ -602,9 +628,9 @@ class ClosableSSEClient(SSEClient):
 
 
 class Stream:
-    def __init__(self, url, stream_handler, build_headers, stream_id, is_async):
+    def __init__(self, build_url, stream_handler, build_headers, stream_id, is_async):
         self.build_headers = build_headers
-        self.url = url
+        self.build_url = build_url
         self.stream_handler = stream_handler
         self.stream_id = stream_id
         self.sse = None
@@ -628,7 +654,7 @@ class Stream:
         return self
 
     def start_stream(self):
-        self.sse = ClosableSSEClient(self.url, session=self.make_session(), build_headers=self.build_headers)
+        self.sse = ClosableSSEClient(self.build_url, session=self.make_session(), build_headers=self.build_headers)
         for msg in self.sse:
             if msg:
                 msg_data = json.loads(msg.data)
@@ -640,7 +666,6 @@ class Stream:
     def close(self):
         while not self.sse and not hasattr(self.sse, 'resp'):
             time.sleep(0.001)
-        self.sse.running = False
         self.sse.close()
         self.thread.join()
         return self

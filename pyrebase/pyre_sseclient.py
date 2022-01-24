@@ -12,11 +12,10 @@ import requests
 end_of_field = re.compile(r'\r\n\r\n|\r\r|\n\n')
 
 class SSEClient(object):
-    def __init__(self, url, session, build_headers, last_id=None, retry=3000, **kwargs):
-        self.url = url
+    def __init__(self, build_url, session, build_headers, last_id=None, retry=3000, **kwargs):
+        self.build_url = build_url
         self.last_id = last_id
         self.retry = retry
-        self.running = True
         # Optional support for passing in a requests.Session()
         self.session = session
         # function for building auth header when token expires
@@ -45,7 +44,7 @@ class SSEClient(object):
         self.requests_kwargs['headers'].update(headers)
         # Use session if set.  Otherwise fall back to requests module.
         self.requester = self.session or requests
-        self.resp = self.requester.get(self.url, stream=True, **self.requests_kwargs)
+        self.resp = self.requester.get(self.build_url(), stream=True, **self.requests_kwargs)
 
         self.resp_iterator = self.resp.iter_content(decode_unicode=True)
 
